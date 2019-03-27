@@ -7,6 +7,7 @@ module Stream where
 import System.Environment
 import System.IO
 import System.IO.Temp
+import System.Directory
 import Data.IORef
 import Control.Monad
 import Data.List (sort)
@@ -104,6 +105,7 @@ accumlateS = scanS (+) 0
 
 -- * File Operations
 
+-- | read lines from given file.
 readLinesS :: forall a. HasCallStack => Read a => String -> IO (Stream a)
 readLinesS filePath = do
     fh <- openFile filePath ReadMode
@@ -112,6 +114,20 @@ readLinesS filePath = do
         flag <- hIsEOF fh
         case flag of
             True -> hClose fh >> pure Nothing
+            False -> hGetLine fh >>= \l ->
+                --print l >>
+                Just <$> (readIO l :: IO a)
+
+-- | read lines from given file
+-- , the file is treated as temp and will be deleted after this iteration
+readLinesS' :: forall a. HasCallStack => Read a => String -> IO (Stream a)
+readLinesS' filePath = do
+    fh <- openFile filePath ReadMode
+    hSetBuffering fh LineBuffering
+    pure . Stream $ do
+        flag <- hIsEOF fh
+        case flag of
+            True -> hClose fh >> removeFile filePath >> pure Nothing
             False -> hGetLine fh >>= \l ->
                 --print l >>
                 Just <$> (readIO l :: IO a)
@@ -226,7 +242,7 @@ sortWithS f maxNumEstimate s = do
     chunks <- chunksOfS chunkSize s
     sortedChunks <- forEachS chunks $ \chunk -> do
         fn <- writeLines' (sortWith f chunk)
-        readLinesS fn
+        readLinesS' fn
     mergeSortedWithS f sortedChunks
 
 -- | count continuous equivalent elements in a stream
