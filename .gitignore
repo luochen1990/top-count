@@ -1,0 +1,9 @@
+.stack-work/
+*.cabal
+*~
+*.in
+*.out
+*.exe
+*.bak
+*.log
+
