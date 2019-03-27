@@ -13,6 +13,7 @@ import GHC.Exts (sortWith)
 import GHC.Stack (HasCallStack)
 import qualified Data.Map.Strict as M
 import qualified Data.PQueue.Min as PQ
+import Control.Arrow ((&&&))
 
 -- | a stream can only be consumed once
 -- , and must be iterated till end, or it will cause resource leak.
@@ -110,36 +111,6 @@ writeLines' xs = do
     fPath <- newTempFile
     writeLines fPath xs
     pure fPath
-
----- | turn a stream into chunks sized n (stream of streams)
---chunksOfS :: Int -> (Stream a) -> IO (Stream (Stream a))
---chunksOfS n s = do
---    cnt <- newIORef 0
---    buf <- newIORef []
---
---    let collectChunk = do
---        c <- readIORef cnt
---        l <- readIORef buf
---        r <- next s
---        case r of
---            Just x -> do
---                if c < n
---                then do
---                    writeIORef buf (x : l)
---                    writeIORef cnt (c + 1)
---                    collectChunk
---                else do
---                    writeIORef buf []
---                    writeIORef cnt 0
---                    pure (Just l)
---            Nothing -> do
---                if c <= 0 then pure Nothing
---                else do
---                    writeIORef buf []
---                    writeIORef cnt 0
---                    pure (Just l)
---
---    pure . Stream $ collectChunk
 
 -- | turn a stream into chunks sized n
 -- , notice that the order in the resulting list is reversed
@@ -249,9 +220,11 @@ countContinuousS s = do
 --    r <- readIORef res
 --    pure r
 
-sortWithS :: HasCallStack => (Show a, Read a, Ord a, Ord b) => (a -> b) -> (Stream a) -> IO (Stream a)
-sortWithS f s = do
-    chunks <- chunksOfS 1000 s
+sortWithS :: HasCallStack => (Show a, Read a, Ord a, Ord b) => (a -> b) -> Int -> (Stream a) -> IO (Stream a)
+sortWithS f maxNumEstimate s = do
+    let chunkSize = (max 1000 (floor (sqrt (fromIntegral maxNumEstimate))))
+    putStrLn ("Sorting With Chunk Size: " ++ show chunkSize)
+    chunks <- chunksOfS chunkSize s
     sortedChunks <- forEachS chunks $ \chunk -> do
         fn <- writeLines' (sortWith f chunk)
         readLinesS fn
@@ -265,10 +238,19 @@ printS s = do
         putStr ", "
     putStr "]"
 
+topCountS :: HasCallStack => (Show a, Read a, Ord a) => Int -> (Stream a) -> IO (Stream (a, Int))
+topCountS maxNumEstimate s = do
+    s' <- sortWithS id maxNumEstimate s
+    (groups, gn) <- countContinuousS s'
+    groups' <- sortWithS ((negate . snd) &&& fst) gn groups
+    pure groups'
+
+(inputs :: IO (Stream Int)) = (readLinesS "t100.in")
+
 test0 = do
-    rst <- sumS =<< (readLinesS "test.txt")
+    rst <- sumS =<< (readLinesS "t100.in")
     print rst
-    rst2 <- accumlateS =<< (readLinesS "test.txt")
+    rst2 <- accumlateS =<< (readLinesS "t100.in")
     --writeLinesS "rst.txt" rst2
     --(xs :: [Int]) <- collectS =<< (readLinesS "rst.txt")
     forEachS_ rst2 $ \x -> do
@@ -277,14 +259,25 @@ test0 = do
     --print xs
 
 test1 = do
-    (inputs :: Stream Int) <- (readLinesS "test.txt")
+    (inputs :: Stream Int) <- (readLinesS "t100.in")
     chunks <- chunksOfS 10 inputs
     printS chunks
 
 test2 = do
-    (inputs :: Stream Int) <- (readLinesS "test.txt")
-    sorted <- sortWithS id inputs
+    (inputs :: Stream Int) <- (readLinesS "t100.in")
+    sorted <- sortWithS id 1000000 inputs
     printS sorted
+
+test3 = do
+    args <- getArgs
+    fname <- if length args >= 1 then pure (head args) else getLine
+    putStrLn ("Input File: " ++ fname)
+
+    (inputs :: Stream Int) <- (readLinesS fname)
+    sorted <- sortWithS id 1000000 inputs
+    let outfn = (fname ++ ".out")
+    writeLinesS outfn sorted
+    putStrLn ("Output File: " ++ outfn)
 
 main = do
     args <- getArgs
@@ -292,8 +285,8 @@ main = do
     putStrLn ("Input File: " ++ fname)
 
     (inputs :: Stream Int) <- (readLinesS fname)
-    sorted <- sortWithS id inputs
+    counted <- topCountS 300000000 inputs
     let outfn = (fname ++ ".out")
-    writeLinesS outfn sorted
+    writeLinesS outfn counted
     putStrLn ("Output File: " ++ outfn)
 
