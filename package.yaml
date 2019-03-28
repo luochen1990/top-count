@@ -28,6 +28,8 @@ dependencies:
 - hspec
 - QuickCheck
 - generic-random
+- random
+- filepath
 
 library:
   source-dirs: src

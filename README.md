@@ -7,19 +7,19 @@ Top Count
 stack build
 ```
 
-生成的可执行文件地址形如:
-
-```
-/path/to/top-count/.stack-work/install/1a74cd24/bin
-```
-
 安装可执行文件:
 
 ```
 stack install
 ```
 
-执行测试:
+可执行文件:
+
+- gen-test-file: 生成测试文件, 如 `u100` 表示生成100个URL, 文件名形如 `u100.in`
+- ext-sort: 外部排序, 输入文件名, 输出结果会写到相应文件, 文件名形如 `u100.in.sort.out`
+- top-count: 找出现次数最多的100项, 输入文件名, 输出结果写到文件, 文件名形如 `u100.in.top-count.out`
+
+运行单元测试:
 
 ```
 stack test

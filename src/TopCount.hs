@@ -28,13 +28,13 @@ topCountS n s = do
 
 main = do
     args <- getArgs
-    putStr "Input File: "
+    putStrLn "Input File: "
     fname <- if length args >= 1 then pure (head args) else getLine
     putStrLn fname
 
     inputs <- (getLinesS fname)
     let outfn = (fname ++ ".top-count.out")
-    putStr ("Output File: " ++ outfn ++ " ...")
+    putStrLn ("Output File: " ++ outfn ++ " ...")
     counted <- topCountS 300 inputs
     writeLinesS outfn counted
     putStrLn "Done!"

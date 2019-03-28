@@ -32,8 +32,9 @@ genURLs :: Int -> Int -> String -> IO ()
 genURLs m n filePath = withFile filePath WriteMode $ \fh -> do
     replicateM_ n (generate (arbURL m) >>= hPutStrLn fh)
 
-genFile :: String -> IO ()
-genFile arg = do
+genFile :: Maybe String -> IO ()
+genFile Nothing = putStrLn "Sample Input:\n\tn100 (100 numbers)\n\ts1000 (1000 strings)\n\tu10 (10 URLs)" >> getLine >>= (genFile . Just)
+genFile (Just arg) = do
     let (prefix : numlit) = arg
     if prefix `elem` "nsu" && (head numlit) `elem` ['1'..'9']
     then do
@@ -44,9 +45,9 @@ genFile arg = do
             'n' -> genNumbers 1000 num outfn
             's' -> genStrings 1000 num outfn
             'u' -> genURLs 1000 num outfn
-    else putStrLn "Sample Input:\n n100 (100 numbers)\n s1000 (1000 strings)" >> getLine >>= genFile
+    else genFile Nothing
 
 main = do
     args <- getArgs
-    (if length args >= 1 then pure (head args) else getLine) >>= genFile
+    genFile (if length args >= 1 then Just (head args) else Nothing)
 

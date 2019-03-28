@@ -10,6 +10,9 @@ import System.Environment
 import System.IO
 import System.IO.Temp
 import System.Directory
+import System.Random (randomIO)
+import System.FilePath.Posix ((</>))
+import Data.Char
 import Data.IORef
 import Control.Monad
 import Data.List (sort)
@@ -150,12 +153,16 @@ writeLinesS filePath s = do
     forEachS_ s $ \x -> hPutStrLn fh (show x)
     hClose fh
 
--- | a lightweight wrapper of 'emptySystemTempFile'
+-- a robust version to create a unique temp file
 newTempFile :: IO String
 newTempFile = do
-    fPath <- emptySystemTempFile "Tmp"
-    putStrLn ("New Temp File: " ++ fPath)
-    pure fPath
+    tmpDir <- getCanonicalTemporaryDirectory
+    (num :: Int) <- randomIO
+    let fPath = tmpDir </> ('T' : show (abs num `mod` 1000000))
+    conflicted <- doesPathExist fPath
+    if conflicted
+    then newTempFile
+    else putStrLn ("New Temp File: " ++ fPath) >> pure fPath
 
 -- | a lightweight wrapper of 'writeLinesS'
 -- , write lines to a temp file and return this file name
