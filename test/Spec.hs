@@ -12,6 +12,7 @@ import Test.QuickCheck
 import Test.QuickCheck.Monadic
 import Stream
 import TopCount hiding (main)
+import qualified Data.Vector.Mutable as V
 
 (<?>) :: (Testable p) => p -> String -> Property
 (<?>) = flip (Test.QuickCheck.counterexample . ("Extra Info: " ++))
@@ -65,7 +66,7 @@ main = hspec $ do
                     s <- run $ fromListS xs
                     ss <- run $ chunksOfS k s
                     xss <- run $ collectS ss
-                    assert (sum (map length xss) == length xs)
+                    assert (sum (map V.length xss) == length xs)
 
     --describe "TopCount" $ do
     --    prop "topCountS works"

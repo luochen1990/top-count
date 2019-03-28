@@ -14,16 +14,19 @@ import System.Random (randomIO)
 import System.FilePath.Posix ((</>))
 import Data.Char
 import Data.IORef
+import Data.Function (on)
 import Control.Monad
 import Data.List (sort)
 import Data.Maybe (fromJust, fromMaybe)
 import GHC.Exts (sortWith)
 import GHC.Stack (HasCallStack)
+import qualified Data.Vector.Mutable as V
+import qualified Data.Vector.Algorithms.Intro as Intro
 import qualified Data.Map.Strict as M
 import qualified Data.PQueue.Min as PQ
 import Control.Arrow ((&&&))
 
--- * definition of Stream
+-- * Definition of Stream
 
 -- | Stream is an abstract data type, supports a lot of list-like operations
 -- , it is fragile just like an Iterator in C++/Rust, you must use it very carefully
@@ -148,7 +151,7 @@ readLinesS' = fetchLinesS read (\(fn, fh) -> hClose fh >> removeFile fn)
 
 writeLinesS :: HasCallStack => Show a => String -> (Stream a) -> IO ()
 writeLinesS filePath s = do
-    fh <- openFile filePath ReadWriteMode
+    fh <- openFile filePath WriteMode
     hSetBuffering fh LineBuffering
     forEachS_ s $ \x -> hPutStrLn fh (show x)
     hClose fh
@@ -172,51 +175,35 @@ writeLinesS' s = do
     writeLinesS fPath s
     pure fPath
 
--- | 'writeLines' is for List
-writeLines :: Show a => String -> [a] -> IO ()
-writeLines filePath xs = do
-    fh <- openFile filePath ReadWriteMode
-    hSetBuffering fh LineBuffering
-    forM_ xs $ \x -> hPutStrLn fh (show x)
-    hClose fh
-
--- | a lightweight wrapper of 'writeLines'
--- , write lines to a temp file and return this file name
-writeLines' :: Show a => [a] -> IO String
-writeLines' xs = do
-    fPath <- newTempFile
-    writeLines fPath xs
-    pure fPath
-
 -- * Core Tool Functions about Stream
 
 -- | turn a stream into chunks sized n
--- , notice that the order in the resulting list is reversed
-chunksOfS :: HasCallStack => Int -> (Stream a) -> IO (Stream [a])
+chunksOfS :: HasCallStack => Int -> (Stream a) -> IO (Stream (V.IOVector a))
 chunksOfS n s = do
     cnt <- newIORef 0
-    buf <- newIORef [] --TODO: use better container
+    buf <- V.new n
 
     let collectChunk = do
             c <- readIORef cnt
             if c < 0 then pure Nothing
             else do
-                l <- readIORef buf
                 r <- next s
                 case r of
                     Just x -> do
                         if c < n
                         then do
-                            writeIORef buf (x : l)
+                            V.write buf c x
                             writeIORef cnt (c + 1)
                             collectChunk
                         else do
-                            writeIORef buf [x]
+                            l <- V.clone buf
+                            V.write buf 0 x
                             writeIORef cnt 1
                             pure (Just l)
                     Nothing -> do
                         if c <= 0 then pure Nothing
                         else do
+                            l <- V.clone (V.slice 0 c buf)
                             writeIORef cnt (-1)
                             pure (Just l)
 
@@ -254,9 +241,19 @@ sortWithS f s = do
     putStrLn ("Sorting With Chunk Size: " ++ show chunkSize)
     chunks <- chunksOfS chunkSize s
     sortedChunks <- forEachS chunks $ \chunk -> do
-        fn <- writeLines' (sortWith f chunk)
+        Intro.sortBy (compare `on` f) chunk
+        fn <- writeBlock' chunk
         readLinesS' fn
     mergeSortedWithS f sortedChunks
+
+    where
+        writeBlock' buf = do
+            fPath <- newTempFile
+            fh <- openFile fPath WriteMode
+            hSetBuffering fh LineBuffering
+            forM_ [0 .. V.length buf - 1] $ \i -> V.read buf i >>= (hPutStrLn fh . show)
+            hClose fh
+            pure fPath
 
 -- | take first n elements of a Stream
 takeS :: HasCallStack => Int -> (Stream a) -> IO (Stream a)
