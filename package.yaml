@@ -25,7 +25,8 @@ dependencies:
 - pqueue
 - containers
 - bytestring
-- text-latin1
+- bytes
+- cereal
 - vector
 - vector-algorithms
 - directory

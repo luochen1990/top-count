@@ -12,6 +12,7 @@ import Test.QuickCheck
 import Test.QuickCheck.Monadic
 import Stream
 import TopCount hiding (main)
+import qualified Data.Vector as IV
 import qualified Data.Vector.Mutable as V
 import Control.Arrow ((&&&))
 
@@ -79,6 +80,13 @@ main = hspec $ do
                     s' <- run $ takeS k s
                     xs' <- run $ collectS s'
                     assert (xs' == take k xs)
+
+        prop "swapOutChunk ~= id" $
+            forAll (listOf (nat' 100)) $ \xs -> monadicIO $ do
+                v <- run $ IV.thaw (IV.fromList xs)
+                s <- run $ swapOutChunk v
+                xs' <- run $ collectS s
+                assert (xs' == xs)
 
     describe "TopCount" $ do
         prop "topCountS works" $

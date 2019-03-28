@@ -5,7 +5,7 @@
 module Stream where
 
 import Prelude hiding (catch, hPutStr, hPutStrLn)
-import Data.ByteString (ByteString, hPutStr, hGetLine, append)
+import Data.ByteString (ByteString, hPutStr, hGet, hGetLine, append)
 import Data.ByteString.Char8 (pack, unpack, hPutStrLn)
 import System.IO (Handle, openFile, openBinaryFile, IOMode(..), hSetBuffering, BufferMode(..), hIsEOF, hClose)
 import System.IO.Temp
@@ -27,6 +27,16 @@ import qualified Data.Vector.Algorithms.Intro as Intro
 import qualified Data.Map.Strict as M
 import qualified Data.PQueue.Min as PQ
 import Control.Arrow ((&&&))
+
+import Data.Bytes.Serial
+import Data.Bytes.Put
+import Data.Bytes.Get
+import Data.Bytes.VarInt
+import Data.Word (Word8)
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+import Data.Serialize.Put (Put)
+import Data.Serialize.Get (Get, Result(..), runGetPartial)
 
 -- * Definition of Stream
 
@@ -117,7 +127,8 @@ accumlateS = scanS (+) 0
 
 -- * File Operations
 
-bufferMode = BlockBuffering (Just (1024 * 4 * 16))
+bufferSize = (1024 * 4 * 1024)
+bufferMode = BlockBuffering (Just bufferSize)
 
 -- | read lines from given file
 -- , the function f is used to preprocess each line
@@ -236,9 +247,42 @@ mergeSortedWithS f ss = do
 
     pure (MkStream {next = findNext, close = forM_ ss close, sizeEstimation = Nothing})
 
+-- | swap out a chunk from memory to disk
+swapOutChunk :: HasCallStack => Serial a => (V.IOVector a) -> IO (Stream a)
+swapOutChunk = serialChunk' >=> deserialS'
+    where
+        serialChunk' :: HasCallStack => Serial a => (V.IOVector a) -> IO FilePath
+        serialChunk' chunk = do
+            fPath <- newTempFile
+            fh <- openBinaryFile fPath WriteMode
+            hSetBuffering fh bufferMode
+            forM_ [0 .. V.length chunk - 1] $ \i -> V.read chunk i >>= (hPutStr fh . runPutS . serialize)
+            hClose fh
+            pure fPath
+
+        deserialS' :: forall a. HasCallStack => Serial a => FilePath -> IO (Stream a)
+        deserialS' fn = do
+            fh <- openBinaryFile fn ReadMode
+            hSetBuffering fh bufferMode
+            buffer <- newIORef BS.empty
+
+            let getNext = do
+                    buf <- readIORef buffer
+                    let go r = case r of
+                            Done x left -> do
+                                writeIORef buffer left
+                                pure (Just x)
+                            Partial cont -> do
+                                buf2 <- hGet fh bufferSize
+                                if BS.null buf2 then pure Nothing else go (cont buf2)
+                            Fail e left -> error "parse failed in readS"
+                    go (runGetPartial (deserialize :: Get a) buf)
+
+            pure (MkStream {next = getNext, close = hClose fh >> removeFile fn, sizeEstimation = Nothing})
+
 -- | sort a stream 's' with a weight function 'f'
 -- , this size estimation is used to decide the 'chunkSize'
-sortWithS :: HasCallStack => (Show a, Read a, Ord a, Ord b)
+sortWithS :: HasCallStack => (Serial a, Ord a, Ord b)
     => (a -> b) -> (Stream a) -> IO (Stream a)
 sortWithS f s = do
     let chunkSize = (max 1000 (floor (sqrt (fromIntegral (fromMaybe 400000000 (sizeEstimation s))))))
@@ -246,18 +290,8 @@ sortWithS f s = do
     chunks <- chunksOfS chunkSize s
     sortedChunks <- forEachS chunks $ \chunk -> do
         Intro.sortBy (compare `on` f) chunk
-        fn <- writeBlock' chunk
-        readLinesS' fn
+        swapOutChunk chunk
     mergeSortedWithS f sortedChunks
-
-    where
-        writeBlock' buf = do
-            fPath <- newTempFile
-            fh <- openBinaryFile fPath WriteMode
-            hSetBuffering fh bufferMode
-            forM_ [0 .. V.length buf - 1] $ \i -> V.read buf i >>= (hPutStrLn fh . pack . show)
-            hClose fh
-            pure fPath
 
 -- | take first n elements of a Stream
 takeS :: HasCallStack => Int -> (Stream a) -> IO (Stream a)

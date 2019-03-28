@@ -16,10 +16,11 @@ import GHC.Stack (HasCallStack)
 import qualified Data.Map.Strict as M
 import qualified Data.PQueue.Min as PQ
 import Control.Arrow ((&&&))
+import Data.Bytes.Serial
 import Stream
 
 -- | this function is used to find the Top n element that has the most occurrences in a stream
-topCountS :: HasCallStack => (Show a, Read a, Ord a) => Int -> (Stream a) -> IO (Stream (a, Int))
+topCountS :: HasCallStack => (Serial a, Ord a) => Int -> (Stream a) -> IO (Stream (a, Int))
 topCountS n s = do
     s' <- sortWithS id s
     groups <- countContinuousS s'
