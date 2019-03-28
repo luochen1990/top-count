@@ -27,18 +27,40 @@ dependencies:
 - directory
 - hspec
 - QuickCheck
+- generic-random
 
 library:
   source-dirs: src
 
 executables:
-  top-count-exe:
-    main:                Main.hs
+  top-count:
+    main:                TopCount.hs
     source-dirs:         app
     ghc-options:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
+    - -main-is TopCount
+    dependencies:
+    - top-count
+  ext-sort:
+    main:                ExtSort.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    - -main-is ExtSort
+    dependencies:
+    - top-count
+  gen-test-file:
+    main:                Gen.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    - -main-is Gen
     dependencies:
     - top-count
 

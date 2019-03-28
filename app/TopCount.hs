@@ -2,7 +2,7 @@
 
 {-# language RankNTypes, ScopedTypeVariables #-}
 
-module TopCount (topCountS) where
+module TopCount where
 
 import System.Environment
 import System.IO
@@ -28,46 +28,16 @@ topCountS maxNumEstimate s = do
     groups' <- sortWithS ((negate . snd) &&& fst) gn groups
     pure groups'
 
-test0 = do
-    rst <- sumS =<< (readLinesS "t100.in")
-    print rst
-    rst2 <- accumlateS =<< (readLinesS "t100.in")
-    --writeLinesS "rst.txt" rst2
-    --(xs :: [Int]) <- collectS =<< (readLinesS "rst.txt")
-    forEachS_ rst2 $ \x -> do
-        print x
-    --xs <- collectS rst2
-    --print xs
-
-test1 = do
-    (inputs :: Stream Int) <- (readLinesS "t100.in")
-    chunks <- chunksOfS 10 inputs
-    printS chunks
-
-test2 = do
-    (inputs :: Stream Int) <- (readLinesS "t100.in")
-    sorted <- sortWithS id 1000000 inputs
-    printS sorted
-
-test3 = do
-    args <- getArgs
-    fname <- if length args >= 1 then pure (head args) else getLine
-    putStrLn ("Input File: " ++ fname)
-
-    (inputs :: Stream Int) <- (readLinesS fname)
-    sorted <- sortWithS id 1000000 inputs
-    let outfn = (fname ++ ".out")
-    writeLinesS outfn sorted
-    putStrLn ("Output File: " ++ outfn)
-
 main = do
     args <- getArgs
+    putStr "Input File: "
     fname <- if length args >= 1 then pure (head args) else getLine
-    putStrLn ("Input File: " ++ fname)
+    putStrLn fname
 
+    let outfn = (fname ++ ".top-count.out")
+    putStr ("Output File: " ++ outfn)
     (inputs :: Stream Int) <- (readLinesS fname)
     counted <- topCountS 300000000 inputs
-    let outfn = (fname ++ ".out")
     writeLinesS outfn counted
-    putStrLn ("Output File: " ++ outfn)
+    putStrLn " Done!"
 
