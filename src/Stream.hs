@@ -105,32 +105,36 @@ accumlateS = scanS (+) 0
 
 -- * File Operations
 
--- | read lines from given file.
-readLinesS :: forall a. HasCallStack => Read a => String -> IO (Stream a)
-readLinesS filePath = do
+-- | read lines from given file
+-- , the function f is used to preprocess each line
+-- , the procedure close is used to clean up resources
+fetchLinesS :: HasCallStack => (String -> a) -> ((String, Handle) -> IO ()) -> String -> IO (Stream a)
+fetchLinesS f close filePath = do
     fh <- openFile filePath ReadMode
     hSetBuffering fh LineBuffering
     pure . Stream $ do
         flag <- hIsEOF fh
         case flag of
-            True -> hClose fh >> pure Nothing
-            False -> hGetLine fh >>= \l ->
-                --print l >>
-                Just <$> (readIO l :: IO a)
+            True -> close (filePath, fh) >> pure Nothing
+            False -> hGetLine fh >>= (pure . Just . f)
+
+-- | get lines from given file.
+getLinesS :: HasCallStack => String -> IO (Stream String)
+getLinesS = fetchLinesS id (\(fn, fh) -> hClose fh)
+
+-- | get lines from given file.
+-- , the file is treated as temp and will be deleted after this iteration
+getLinesS' :: HasCallStack => String -> IO (Stream String)
+getLinesS' = fetchLinesS id (\(fn, fh) -> hClose fh >> removeFile fn)
+
+-- | read lines from given file.
+readLinesS :: forall a. HasCallStack => Read a => String -> IO (Stream a)
+readLinesS = fetchLinesS read (\(fn, fh) -> hClose fh)
 
 -- | read lines from given file
 -- , the file is treated as temp and will be deleted after this iteration
 readLinesS' :: forall a. HasCallStack => Read a => String -> IO (Stream a)
-readLinesS' filePath = do
-    fh <- openFile filePath ReadMode
-    hSetBuffering fh LineBuffering
-    pure . Stream $ do
-        flag <- hIsEOF fh
-        case flag of
-            True -> hClose fh >> removeFile filePath >> pure Nothing
-            False -> hGetLine fh >>= \l ->
-                --print l >>
-                Just <$> (readIO l :: IO a)
+readLinesS' = fetchLinesS read (\(fn, fh) -> hClose fh >> removeFile fn)
 
 writeLinesS :: HasCallStack => Show a => String -> (Stream a) -> IO ()
 writeLinesS filePath s = do
@@ -181,7 +185,7 @@ writeLines' xs = do
 chunksOfS :: HasCallStack => Int -> (Stream a) -> IO (Stream [a])
 chunksOfS n s = do
     cnt <- newIORef 0
-    buf <- newIORef []
+    buf <- newIORef [] --TODO: use better container
 
     let collectChunk = do
             c <- readIORef cnt

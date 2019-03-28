@@ -35,9 +35,9 @@ main = do
     putStrLn fname
 
     let outfn = (fname ++ ".top-count.out")
-    putStr ("Output File: " ++ outfn)
-    (inputs :: Stream Int) <- (readLinesS fname)
+    putStr ("Output File: " ++ outfn ++ " ...")
+    inputs <- (getLinesS fname)
     counted <- topCountS 300000000 inputs
     writeLinesS outfn counted
-    putStrLn " Done!"
+    putStrLn "Done!"
 
