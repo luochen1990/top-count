@@ -35,32 +35,32 @@ library:
 executables:
   top-count:
     main:                TopCount.hs
-    source-dirs:         app
+    source-dirs:         src
     ghc-options:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
-    - -main-is TopCount
+    - -main-is           TopCount
     dependencies:
     - top-count
   ext-sort:
     main:                ExtSort.hs
-    source-dirs:         app
+    source-dirs:         src
     ghc-options:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
-    - -main-is ExtSort
+    - -main-is           ExtSort
     dependencies:
     - top-count
   gen-test-file:
     main:                Gen.hs
-    source-dirs:         app
+    source-dirs:         src
     ghc-options:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
-    - -main-is Gen
+    - -main-is           Gen
     dependencies:
     - top-count
 

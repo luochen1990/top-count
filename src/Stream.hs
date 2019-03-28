@@ -4,6 +4,8 @@
 
 module Stream where
 
+import Prelude hiding (catch)
+import System.IO.Error hiding (catch)
 import System.Environment
 import System.IO
 import System.IO.Temp
@@ -11,7 +13,7 @@ import System.Directory
 import Data.IORef
 import Control.Monad
 import Data.List (sort)
-import Data.Maybe (fromJust)
+import Data.Maybe (fromJust, fromMaybe)
 import GHC.Exts (sortWith)
 import GHC.Stack (HasCallStack)
 import qualified Data.Map.Strict as M
@@ -23,29 +25,30 @@ import Control.Arrow ((&&&))
 -- | Stream is an abstract data type, supports a lot of list-like operations
 -- , it is fragile just like an Iterator in C++/Rust, you must use it very carefully
 -- , a stream can only be consumed once
--- , and must be iterated till end, or it will cause resource leak.
-newtype Stream a = Stream {next :: IO (Maybe a)} --TODO: add field: close ?
+-- , and must be closed after iteration, or it will cause resource leak
+-- , the field 'sizeEstimation' means the size estimation of the Stream, Nothing means unknown
+data Stream a = MkStream {next :: IO (Maybe a), close :: IO (), sizeEstimation :: Maybe Int}
 
--- * tool functions about Stream
+-- * Tool Functions about Stream
 
 -- | mock a Stream from a List,
 -- , this can be used as a tool function for test
 fromListS :: HasCallStack => [a] -> IO (Stream a)
 fromListS initXs = do
     l <- newIORef (Just initXs)
-    pure . Stream $ do
-        r <- readIORef l
-        case r of
-            Just (x:xs') -> writeIORef l (Just xs') >> pure (Just x)
-            Just [] -> writeIORef l Nothing >> pure Nothing
-            Nothing -> error "call next on an empty Stream is invalid!"
+    let getNext = do
+            r <- readIORef l
+            case r of
+                Just (x:xs') -> writeIORef l (Just xs') >> pure (Just x)
+                Just [] -> writeIORef l Nothing >> pure Nothing
+                Nothing -> error "call next on an empty Stream is invalid!"
+    pure (MkStream {next = getNext, close = pure (), sizeEstimation = Nothing})
 
 printS :: HasCallStack => Show a => Stream a -> IO ()
 printS s = do
     putStr "Stream ["
-    forEachS_ s $ \x -> do
-        putStr (show x)
-        putStr ", "
+    forEachS_ s $ \x -> putStr (show x) >> putStr ", "
+    close s
     putStr "]"
 
 -- * Iterate Through a Stream
@@ -55,16 +58,16 @@ forEachS s proc = loop where
     loop = do
         r <- next s
         case r of
-            Nothing -> pure []
             Just x -> (:) <$> proc x <*> loop
+            Nothing -> close s >> pure []
 
 forEachS_ :: HasCallStack => Stream a -> (a -> IO b) -> IO ()
 forEachS_ s proc = loop where
     loop = do
         r <- next s
         case r of
-            Nothing -> pure ()
             Just x -> proc x >> loop
+            Nothing -> close s >> pure ()
 
 -- * Fold & Scan
 
@@ -72,29 +75,30 @@ foldS :: (a -> r -> r) -> r -> Stream a -> IO r
 foldS op init s = do
     r <- next s
     case r of
-        Nothing -> pure init
-        Just x -> op x <$> foldS op init s
+        Just x -> init `seq` foldS op (op x init) s
+        Nothing -> close s >> pure init
 
 scanS :: (a -> r -> r) -> r -> Stream a -> IO (Stream r)
 scanS op init s = do
     visd <- newIORef False
     stat <- newIORef init
-    pure . Stream $ do
-        v0 <- readIORef visd
-        case v0 of
-            False -> (writeIORef visd True >> pure (Just init))
-            True -> do
-                r <- next s
-                case r of
-                    Just x -> do
-                        st0 <- readIORef stat
-                        let st1 = op x st0
-                        writeIORef stat st1
-                        pure (Just st1)
-                    Nothing -> pure Nothing
+    let getNext = do
+            v0 <- readIORef visd
+            case v0 of
+                False -> (writeIORef visd True >> pure (Just init))
+                True -> do
+                    r <- next s
+                    case r of
+                        Just x -> do
+                            st0 <- readIORef stat
+                            let st1 = op x st0
+                            writeIORef stat st1
+                            pure (Just st1)
+                        Nothing -> pure Nothing
+    pure (MkStream {next = getNext, close = close s, sizeEstimation = Nothing})
 
 collectS :: HasCallStack => Stream a -> IO [a]
-collectS = foldS (:) []
+collectS s = reverse <$> foldS (:) [] s
 
 sumS :: (Stream Int) -> IO Int
 --sumS s = sum <$> collectS s
@@ -107,16 +111,19 @@ accumlateS = scanS (+) 0
 
 -- | read lines from given file
 -- , the function f is used to preprocess each line
--- , the procedure close is used to clean up resources
+-- , the procedure closeProc is used to clean up resources
 fetchLinesS :: HasCallStack => (String -> a) -> ((String, Handle) -> IO ()) -> String -> IO (Stream a)
-fetchLinesS f close filePath = do
+fetchLinesS f closeProc filePath = do
     fh <- openFile filePath ReadMode
     hSetBuffering fh LineBuffering
-    pure . Stream $ do
-        flag <- hIsEOF fh
-        case flag of
-            True -> close (filePath, fh) >> pure Nothing
-            False -> hGetLine fh >>= (pure . Just . f)
+
+    let getNext = do
+            flag <- hIsEOF fh
+            case flag of
+                False -> hGetLine fh >>= (pure . Just . f)
+                True -> pure Nothing
+
+    pure (MkStream {next = getNext, close = closeProc (filePath, fh), sizeEstimation = Nothing})
 
 -- | get lines from given file.
 getLinesS :: HasCallStack => String -> IO (Stream String)
@@ -140,12 +147,8 @@ writeLinesS :: HasCallStack => Show a => String -> (Stream a) -> IO ()
 writeLinesS filePath s = do
     fh <- openFile filePath ReadWriteMode
     hSetBuffering fh LineBuffering
-    let loop = do
-            r <- next s
-            case r of
-                Just x -> hPutStrLn fh (show x) >> loop
-                Nothing -> hClose fh
-    loop
+    forEachS_ s $ \x -> hPutStrLn fh (show x)
+    hClose fh
 
 -- | a lightweight wrapper of 'emptySystemTempFile'
 newTempFile :: IO String
@@ -210,7 +213,7 @@ chunksOfS n s = do
                             writeIORef cnt (-1)
                             pure (Just l)
 
-    pure . Stream $ collectChunk
+    pure (MkStream {next = collectChunk, close = close s, sizeEstimation = Nothing})
 
 -- | merge n sorted streams
 mergeSortedWithS :: HasCallStack => Ord a => Ord b => (a -> b) -> [(Stream a)] -> IO (Stream a)
@@ -233,15 +236,14 @@ mergeSortedWithS f ss = do
                         writeIORef pq pq1
                         findNext
 
-    pure . Stream $ findNext
+    pure (MkStream {next = findNext, close = forM_ ss close, sizeEstimation = Nothing})
 
 -- | sort a stream 's' with a weight function 'f'
--- , the argument 'maxNumEstimate' means the size estimation of 's'
 -- , this size estimation is used to decide the 'chunkSize'
 sortWithS :: HasCallStack => (Show a, Read a, Ord a, Ord b)
-    => (a -> b) -> Int -> (Stream a) -> IO (Stream a)
-sortWithS f maxNumEstimate s = do
-    let chunkSize = (max 1000 (floor (sqrt (fromIntegral maxNumEstimate))))
+    => (a -> b) -> (Stream a) -> IO (Stream a)
+sortWithS f s = do
+    let chunkSize = (max 1000 (floor (sqrt (fromIntegral (fromMaybe 400000000 (sizeEstimation s))))))
     putStrLn ("Sorting With Chunk Size: " ++ show chunkSize)
     chunks <- chunksOfS chunkSize s
     sortedChunks <- forEachS chunks $ \chunk -> do
@@ -249,9 +251,28 @@ sortWithS f maxNumEstimate s = do
         readLinesS' fn
     mergeSortedWithS f sortedChunks
 
--- | count continuous equivalent elements in a stream
--- , along with number of the continuous groups
-countContinuousS :: HasCallStack => Eq a => (Stream a) -> IO (Stream (a, Int), Int)
+-- | take first n elements of a Stream
+takeS :: HasCallStack => Int -> (Stream a) -> IO (Stream a)
+takeS n s = do
+    cnt <- newIORef 0
+
+    let getNext = do
+            c <- readIORef cnt
+            if c < n
+            then do
+                r <- next s
+                case r of
+                    (Just x) -> do
+                        writeIORef cnt (c+1)
+                        pure (Just x)
+                    Nothing -> close s >> pure Nothing
+            else
+                close s >> pure Nothing
+
+    pure (MkStream {next = getNext, close = close s, sizeEstimation = Just n})
+
+-- | count continuous equivalent elements in a Stream
+countContinuousS :: HasCallStack => Eq a => (Stream a) -> IO (Stream (a, Int))
 countContinuousS s = do
     latest <- newIORef Nothing
     cnt <- newIORef 0
@@ -280,5 +301,5 @@ countContinuousS s = do
                             pure (Just (fromJust lat, c))
 
     gn <- readIORef gnum
-    pure (Stream findNext, gn)
+    pure (MkStream {next = findNext, close = close s, sizeEstimation = Just gn})
 

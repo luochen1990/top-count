@@ -2,7 +2,7 @@
 
 {-# language RankNTypes, ScopedTypeVariables #-}
 
-module TopCount where
+module ExtSort where
 
 import System.Environment
 import System.IO
@@ -18,24 +18,16 @@ import qualified Data.PQueue.Min as PQ
 import Control.Arrow ((&&&))
 import Stream
 
--- | this function is used to find the Top n element that has the most occurrences in a stream
-topCountS :: HasCallStack => (Show a, Read a, Ord a) => Int -> (Stream a) -> IO (Stream (a, Int))
-topCountS n s = do
-    s' <- sortWithS id s
-    groups <- countContinuousS s'
-    groups' <- sortWithS ((negate . snd) &&& fst) groups
-    takeS n groups'
-
 main = do
     args <- getArgs
     putStr "Input File: "
     fname <- if length args >= 1 then pure (head args) else getLine
     putStrLn fname
 
-    let outfn = (fname ++ ".top-count.out")
-    putStr ("Output File: " ++ outfn ++ " ...")
-    inputs <- (getLinesS fname)
-    counted <- topCountS 100 inputs
-    writeLinesS outfn counted
-    putStrLn "Done!"
+    (inputs :: Stream Int) <- (readLinesS fname)
+    let outfn = (fname ++ ".sort.out")
+    putStr ("Output File: " ++ outfn)
+    sorted <- sortWithS id inputs
+    writeLinesS outfn sorted
+    putStrLn " Done!"
 
