@@ -1,14 +1,16 @@
 -- Copyright 2018 LuoChen (luochen1990@gmail.com). Licensed under the Apache License 2.0.
 
-{-# language RankNTypes, ScopedTypeVariables, BlockArguments #-}
+{-# language RankNTypes, ScopedTypeVariables, BlockArguments, OverloadedStrings #-}
 
 module Stream where
 
-import Prelude hiding (catch)
+import Prelude hiding (catch, hPutStr, hPutStrLn)
+import Data.ByteString (ByteString, hPutStr, hGetLine, append)
+import Data.ByteString.Char8 (pack, unpack, hPutStrLn)
+import System.IO (Handle, openFile, openBinaryFile, IOMode(..), hSetBuffering, BufferMode(..), hIsEOF, hClose)
+import System.IO.Temp
 import System.IO.Error hiding (catch)
 import System.Environment
-import System.IO
-import System.IO.Temp
 import System.Directory
 import System.Random (randomIO)
 import System.FilePath.Posix ((</>))
@@ -115,13 +117,15 @@ accumlateS = scanS (+) 0
 
 -- * File Operations
 
+bufferMode = BlockBuffering (Just (1024 * 4 * 16))
+
 -- | read lines from given file
 -- , the function f is used to preprocess each line
 -- , the procedure closeProc is used to clean up resources
-fetchLinesS :: HasCallStack => (String -> a) -> ((String, Handle) -> IO ()) -> String -> IO (Stream a)
+fetchLinesS :: HasCallStack => (ByteString -> a) -> ((String, Handle) -> IO ()) -> String -> IO (Stream a)
 fetchLinesS f closeProc filePath = do
-    fh <- openFile filePath ReadMode
-    hSetBuffering fh LineBuffering
+    fh <- openBinaryFile filePath ReadMode
+    hSetBuffering fh bufferMode
 
     let getNext = do
             flag <- hIsEOF fh
@@ -132,28 +136,28 @@ fetchLinesS f closeProc filePath = do
     pure (MkStream {next = getNext, close = closeProc (filePath, fh), sizeEstimation = Nothing})
 
 -- | get lines from given file.
-getLinesS :: HasCallStack => String -> IO (Stream String)
+getLinesS :: HasCallStack => FilePath -> IO (Stream ByteString)
 getLinesS = fetchLinesS id (\(fn, fh) -> hClose fh)
 
 -- | get lines from given file.
 -- , the file is treated as temp and will be deleted after this iteration
-getLinesS' :: HasCallStack => String -> IO (Stream String)
+getLinesS' :: HasCallStack => FilePath -> IO (Stream ByteString)
 getLinesS' = fetchLinesS id (\(fn, fh) -> hClose fh >> removeFile fn)
 
 -- | read lines from given file.
-readLinesS :: forall a. HasCallStack => Read a => String -> IO (Stream a)
-readLinesS = fetchLinesS read (\(fn, fh) -> hClose fh)
+readLinesS :: forall a. HasCallStack => Read a => FilePath -> IO (Stream a)
+readLinesS = fetchLinesS (read . unpack) (\(fn, fh) -> hClose fh)
 
 -- | read lines from given file
 -- , the file is treated as temp and will be deleted after this iteration
-readLinesS' :: forall a. HasCallStack => Read a => String -> IO (Stream a)
-readLinesS' = fetchLinesS read (\(fn, fh) -> hClose fh >> removeFile fn)
+readLinesS' :: forall a. HasCallStack => Read a => FilePath -> IO (Stream a)
+readLinesS' = fetchLinesS (read . unpack) (\(fn, fh) -> hClose fh >> removeFile fn)
 
-writeLinesS :: HasCallStack => Show a => String -> (Stream a) -> IO ()
+writeLinesS :: HasCallStack => Show a => FilePath -> (Stream a) -> IO ()
 writeLinesS filePath s = do
-    fh <- openFile filePath WriteMode
-    hSetBuffering fh LineBuffering
-    forEachS_ s $ \x -> hPutStrLn fh (show x)
+    fh <- openBinaryFile filePath WriteMode
+    hSetBuffering fh bufferMode
+    forEachS_ s $ \x -> hPutStrLn fh (pack (show x))
     hClose fh
 
 -- a robust version to create a unique temp file
@@ -249,9 +253,9 @@ sortWithS f s = do
     where
         writeBlock' buf = do
             fPath <- newTempFile
-            fh <- openFile fPath WriteMode
-            hSetBuffering fh LineBuffering
-            forM_ [0 .. V.length buf - 1] $ \i -> V.read buf i >>= (hPutStrLn fh . show)
+            fh <- openBinaryFile fPath WriteMode
+            hSetBuffering fh bufferMode
+            forM_ [0 .. V.length buf - 1] $ \i -> V.read buf i >>= (hPutStrLn fh . pack . show)
             hClose fh
             pure fPath
 

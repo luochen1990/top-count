@@ -20,14 +20,14 @@ import Stream
 
 main = do
     args <- getArgs
-    putStrLn "Input File: "
+    putStrLn "Input File:"
     fname <- if length args >= 1 then pure (head args) else getLine
-    putStrLn fname
+    putStrLn ("\t" ++ fname)
 
-    (inputs :: Stream Int) <- (readLinesS fname)
+    inputs <- (getLinesS fname)
     let outfn = (fname ++ ".sort.out")
-    putStrLn ("Output File: " ++ outfn ++ " ...")
+    putStrLn ("Output File:\n\t" ++ outfn ++ " ...")
     sorted <- sortWithS id inputs
     writeLinesS outfn sorted
-    putStrLn " Done!"
+    putStrLn "Done!"
 

@@ -24,6 +24,8 @@ dependencies:
 - temporary
 - pqueue
 - containers
+- bytestring
+- text-latin1
 - vector
 - vector-algorithms
 - directory
