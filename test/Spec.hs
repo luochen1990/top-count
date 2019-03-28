@@ -13,10 +13,14 @@ import Test.QuickCheck.Monadic
 import Stream
 import TopCount hiding (main)
 import qualified Data.Vector.Mutable as V
+import Control.Arrow ((&&&))
 
 (<?>) :: (Testable p) => p -> String -> Property
 (<?>) = flip (Test.QuickCheck.counterexample . ("Extra Info: " ++))
 infixl 2 <?>
+
+nat :: Int -> Gen Int
+nat n = (resize n arbitrary `suchThat` (>= 0))
 
 nat' :: Int -> Gen Int
 nat' n = (resize n arbitrary `suchThat` (> 0))
@@ -68,6 +72,20 @@ main = hspec $ do
                     xss <- run $ collectS ss
                     assert (sum (map V.length xss) == length xs)
 
-    --describe "TopCount" $ do
-    --    prop "topCountS works"
+        prop "takeS ~= take" $
+            forAll (nat 100) $ \k ->
+                forAll (listOf (nat' 100)) $ \xs -> monadicIO $ do
+                    s <- run $ fromListS xs
+                    s' <- run $ takeS k s
+                    xs' <- run $ collectS s'
+                    assert (xs' == take k xs)
+
+    describe "TopCount" $ do
+        prop "topCountS works" $
+            forAll (nat 100) $ \k ->
+                forAll (listOf (nat' 100)) $ \xs -> monadicIO $ do
+                    s <- run $ fromListS xs
+                    s' <- run $ topCountS k s
+                    groups <- run $ collectS s'
+                    assert (groups == sortWith ((negate . snd) &&& fst) groups)
 

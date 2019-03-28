@@ -269,9 +269,9 @@ takeS n s = do
                     (Just x) -> do
                         writeIORef cnt (c+1)
                         pure (Just x)
-                    Nothing -> close s >> pure Nothing
+                    Nothing -> pure Nothing
             else
-                close s >> pure Nothing
+                pure Nothing
 
     pure (MkStream {next = getNext, close = close s, sizeEstimation = Just n})
 
