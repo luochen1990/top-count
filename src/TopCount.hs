@@ -38,5 +38,5 @@ main = do
     putStrLn ("Output File:\n\t" ++ outfn ++ " ...")
     counted <- topCountS 100 inputs
     writeLinesS outfn counted
-    putStrLn "Done!"
+    putStrLn "All Done!"
 

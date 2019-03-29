@@ -128,7 +128,7 @@ accumlateS = scanS (+) 0
 
 -- * File Operations
 
-bufferSize = (1024 * 4 * 1024)
+bufferSize = (4 * 1024 * 1024) -- 4MB
 bufferMode = BlockBuffering (Just bufferSize)
 
 -- | read lines from given file
@@ -187,11 +187,11 @@ newTempFile mode = do
     if conflicted then newTempFile mode
     else do {
         fh <- openBinaryFile fn mode;
-        putStrLn ("New Temp File: " ++ fn);
+        putStr ("(new temp file: " ++ fn ++ ")");
         pure (fn, fh)
     } `catch` \e -> do
         if isDoesNotExistError e then pure () else pure ()
-        putStrLn ("newTempFile Error: " ++ show e) >> newTempFile mode
+        putStrLn ("[WARN] newTempFile Error: " ++ show e) >> newTempFile mode
 
 -- | a lightweight wrapper of 'writeLinesS'
 -- , write lines to a temp file and return this file name
@@ -298,10 +298,16 @@ sortWithS :: HasCallStack => (Serial a, Ord a, Ord b)
 sortWithS f s = do
     let chunkSize = (max 1000 (floor (sqrt (fromIntegral (fromMaybe 400000000 (sizeEstimation s))))))
     putStrLn ("Sorting With Chunk Size: " ++ show chunkSize)
+    gnum <- newIORef 1
     chunks <- chunksOfS chunkSize s
     sortedChunks <- forEachS chunks $ \chunk -> do
+        gn <- readIORef gnum
+        putStr ("  Processing Chunk " ++ show gn ++ "(sz: " ++ show (V.length chunk) ++ ") -- ")
         Intro.sortBy (compare `on` f) chunk
-        swapOutChunk chunk
+        swapped <- swapOutChunk chunk
+        putStrLn (" -- Done.")
+        writeIORef gnum (gn+1)
+        pure swapped
     mergeSortedWithS f sortedChunks
 
 -- | take first n elements of a Stream
