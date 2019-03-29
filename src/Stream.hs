@@ -18,6 +18,7 @@ import Data.Char
 import Data.IORef
 import Data.Function (on)
 import Control.Monad
+import Control.Exception
 import Data.List (sort)
 import Data.Maybe (fromJust, fromMaybe)
 import GHC.Exts (sortWith)
@@ -164,6 +165,11 @@ readLinesS = fetchLinesS (read . unpack) (\(fn, fh) -> hClose fh)
 readLinesS' :: forall a. HasCallStack => Read a => FilePath -> IO (Stream a)
 readLinesS' = fetchLinesS (read . unpack) (\(fn, fh) -> hClose fh >> removeFile fn)
 
+hWriteLinesS :: HasCallStack => Show a => Handle -> (Stream a) -> IO ()
+hWriteLinesS fh s = do
+    hSetBuffering fh bufferMode
+    forEachS_ s $ \x -> hPutStrLn fh (pack (show x))
+
 writeLinesS :: HasCallStack => Show a => FilePath -> (Stream a) -> IO ()
 writeLinesS filePath s = do
     fh <- openBinaryFile filePath WriteMode
@@ -172,23 +178,29 @@ writeLinesS filePath s = do
     hClose fh
 
 -- a robust version to create a unique temp file
-newTempFile :: IO String
-newTempFile = do
+newTempFile :: IOMode -> IO (String, Handle)
+newTempFile mode = do
     tmpDir <- getCanonicalTemporaryDirectory
     (num :: Int) <- randomIO
-    let fPath = tmpDir </> ('T' : show (abs num `mod` 1000000))
-    conflicted <- doesPathExist fPath
-    if conflicted
-    then newTempFile
-    else putStrLn ("New Temp File: " ++ fPath) >> pure fPath
+    let fn = tmpDir </> ('T' : show (abs num `mod` 1000000))
+    conflicted <- doesPathExist fn
+    if conflicted then newTempFile mode
+    else do {
+        fh <- openBinaryFile fn mode;
+        putStrLn ("New Temp File: " ++ fn);
+        pure (fn, fh)
+    } `catch` \e -> do
+        if isDoesNotExistError e then pure () else pure ()
+        putStrLn ("newTempFile Error: " ++ show e) >> newTempFile mode
 
 -- | a lightweight wrapper of 'writeLinesS'
 -- , write lines to a temp file and return this file name
 writeLinesS' :: Show a => (Stream a) -> IO String
 writeLinesS' s = do
-    fPath <- newTempFile
-    writeLinesS fPath s
-    pure fPath
+    (fn, fh) <- newTempFile WriteMode
+    hWriteLinesS fh s
+    hClose fh
+    pure fn
 
 -- * Core Tool Functions about Stream
 
@@ -253,12 +265,11 @@ swapOutChunk = serialChunk' >=> deserialS'
     where
         serialChunk' :: HasCallStack => Serial a => (V.IOVector a) -> IO FilePath
         serialChunk' chunk = do
-            fPath <- newTempFile
-            fh <- openBinaryFile fPath WriteMode
+            (fn, fh) <- newTempFile WriteMode
             hSetBuffering fh bufferMode
             forM_ [0 .. V.length chunk - 1] $ \i -> V.read chunk i >>= (hPutStr fh . runPutS . serialize)
             hClose fh
-            pure fPath
+            pure fn
 
         deserialS' :: forall a. HasCallStack => Serial a => FilePath -> IO (Stream a)
         deserialS' fn = do
