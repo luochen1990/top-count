@@ -34,7 +34,7 @@ main = hspec $ do
                 collect (x == y) $ x + y === y + x
 
     describe "Stream" $ do
-        prop "readLinesS' . writeLinesS' = id" $
+        prop "readLinesS' . writeLinesS' ~= id" $
             forAll (listOf (nat' 100)) $ \xs -> monadicIO $ do
                 fn <- run $ fromListS xs >>= writeLinesS'
                 xs' <- run $ readLinesS' fn >>= collectS
@@ -42,12 +42,12 @@ main = hspec $ do
                 monitor (<?> ("xs: " ++ show xs))
                 assert (xs' == xs)
 
-        prop "collectS . fromListS = id" $
+        prop "collectS . fromListS ~= id" $
             forAll (listOf (nat' 100)) $ \xs -> monadicIO $ do
                 xs' <- run ((collectS <=< fromListS) xs)
                 assert (xs == xs')
 
-        prop "sortWithS did sort things" $
+        prop "sortWithS id ~= sort" $
             forAll (listOf (nat' 100)) $ \xs -> monadicIO $ do
                 xs' <- run (fromListS xs >>= (sortWithS id) >>= collectS)
                 monitor (<?> ("xs': " ++ show xs'))
@@ -99,11 +99,15 @@ main = hspec $ do
                     assert (groups == countCont xs)
 
     describe "TopCount" $ do
-        prop "topCountS works" $
-            forAll (nat 100) $ \k ->
-                forAll (listOf (nat' 100)) $ \xs -> monadicIO $ do
-                    s <- run $ fromListS xs
-                    s' <- run $ topCountS k s
-                    groups <- run $ collectS s'
-                    assert (groups == sortWith ((negate . snd) &&& fst) groups)
+        prop "topCountS ~= topCount" $
+            let
+                countCont = map (head &&& length) . group
+                topCount k = take k . sortWith ((negate . snd) &&& fst) . countCont . sort
+            in
+                forAll (nat 100) $ \k ->
+                    forAll (listOf (nat' 100)) $ \xs -> monadicIO $ do
+                        s <- run $ fromListS xs
+                        s' <- run $ topCountS k s
+                        groups <- run $ collectS s'
+                        assert (groups == topCount k xs)
 
