@@ -88,6 +88,16 @@ main = hspec $ do
                 xs' <- run $ collectS s
                 assert (xs' == xs)
 
+        prop "countContinuousS ~= countCont" $
+            let
+                countCont = map (head &&& length) . group
+            in
+                forAll (listOf (nat' 100)) $ \xs -> monadicIO $ do
+                    s <- run $ fromListS xs
+                    s' <- run $ countContinuousS s
+                    groups <- run $ collectS s'
+                    assert (groups == countCont xs)
+
     describe "TopCount" $ do
         prop "topCountS works" $
             forAll (nat 100) $ \k ->
