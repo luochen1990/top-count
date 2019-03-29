@@ -19,6 +19,7 @@ import Data.IORef
 import Data.Function (on)
 import Control.Monad
 import Control.Exception
+import Control.Concurrent (threadDelay)
 import Data.List (sort)
 import Data.Maybe (fromJust, fromMaybe)
 import GHC.Exts (sortWith)
@@ -47,6 +48,13 @@ import Data.Serialize.Get (Get, Result(..), runGetPartial)
 -- , and must be closed after iteration, or it will cause resource leak
 -- , the field 'sizeEstimation' means the size estimation of the Stream, Nothing means unknown
 data Stream a = MkStream {next :: IO (Maybe a), close :: IO (), sizeEstimation :: Maybe Int}
+
+-- | merge two sizeEstimation into one, the tight one is preserved
+mergeSzEst :: Maybe Int -> Maybe Int -> Maybe Int
+mergeSzEst (Just x) (Just y) = Just (min x y)
+mergeSzEst (Just x) Nothing = Just x
+mergeSzEst Nothing (Just y) = Just y
+mergeSzEst Nothing Nothing = Nothing
 
 -- * Tool Functions about Stream
 
@@ -114,7 +122,7 @@ scanS op init s = do
                             writeIORef stat st1
                             pure (Just st1)
                         Nothing -> pure Nothing
-    pure (MkStream {next = getNext, close = close s, sizeEstimation = Nothing})
+    pure (MkStream {next = getNext, close = close s, sizeEstimation = (+) <$> sizeEstimation s <*> Just 1})
 
 collectS :: HasCallStack => Stream a -> IO [a]
 collectS s = reverse <$> foldS (:) [] s
@@ -128,8 +136,11 @@ accumlateS = scanS (+) 0
 
 -- * File Operations
 
-bufferSize = (4 * 1024 * 1024) -- 4MB
-bufferMode = BlockBuffering (Just bufferSize)
+bigBufferSize = (10 * 1024 * 1024)
+bigBufferMode = BlockBuffering (Just bigBufferSize)
+
+smallBufferSize = (4 * 1024 * 10)
+smallBufferMode = BlockBuffering (Just smallBufferSize)
 
 -- | read lines from given file
 -- , the function f is used to preprocess each line
@@ -137,7 +148,7 @@ bufferMode = BlockBuffering (Just bufferSize)
 fetchLinesS :: HasCallStack => (ByteString -> a) -> ((String, Handle) -> IO ()) -> String -> IO (Stream a)
 fetchLinesS f closeProc filePath = do
     fh <- openBinaryFile filePath ReadMode
-    hSetBuffering fh bufferMode
+    hSetBuffering fh bigBufferMode
 
     let getNext = do
             flag <- hIsEOF fh
@@ -167,13 +178,13 @@ readLinesS' = fetchLinesS (read . unpack) (\(fn, fh) -> hClose fh >> removeFile 
 
 hWriteLinesS :: HasCallStack => Show a => Handle -> (Stream a) -> IO ()
 hWriteLinesS fh s = do
-    hSetBuffering fh bufferMode
+    hSetBuffering fh bigBufferMode
     forEachS_ s $ \x -> hPutStrLn fh (pack (show x))
 
 writeLinesS :: HasCallStack => Show a => FilePath -> (Stream a) -> IO ()
 writeLinesS filePath s = do
     fh <- openBinaryFile filePath WriteMode
-    hSetBuffering fh bufferMode
+    hSetBuffering fh bigBufferMode
     forEachS_ s $ \x -> hPutStrLn fh (pack (show x))
     hClose fh
 
@@ -187,11 +198,13 @@ newTempFile mode = do
     if conflicted then newTempFile mode
     else do {
         fh <- openBinaryFile fn mode;
-        putStr ("(new temp file: " ++ fn ++ ")");
+        putStr ("(new temp file: " ++ fn ++ " " ++ show mode ++ ")");
         pure (fn, fh)
     } `catch` \e -> do
         if isDoesNotExistError e then pure () else pure ()
-        putStrLn ("[WARN] newTempFile Error: " ++ show e) >> newTempFile mode
+        putStrLn ("[WARN] newTempFile Error: " ++ show e)
+        threadDelay 1000000
+        newTempFile mode
 
 -- | a lightweight wrapper of 'writeLinesS'
 -- , write lines to a temp file and return this file name
@@ -234,7 +247,7 @@ chunksOfS n s = do
                             writeIORef cnt (-1)
                             pure (Just l)
 
-    pure (MkStream {next = collectChunk, close = close s, sizeEstimation = Nothing})
+    pure (MkStream {next = collectChunk, close = close s, sizeEstimation = (sizeEstimation s >>= \x -> Just (ceiling (fromIntegral x / fromIntegral n)))})
 
 -- | merge n sorted streams
 mergeSortedWithS :: HasCallStack => Ord a => Ord b => (a -> b) -> [(Stream a)] -> IO (Stream a)
@@ -257,16 +270,16 @@ mergeSortedWithS f ss = do
                         writeIORef pq pq1
                         findNext
 
-    pure (MkStream {next = findNext, close = forM_ ss close, sizeEstimation = Nothing})
+    pure (MkStream {next = findNext, close = forM_ ss close, sizeEstimation = foldr mergeSzEst Nothing (map sizeEstimation ss)})
 
 -- | swap out a chunk from memory to disk
 swapOutChunk :: HasCallStack => Serial a => (V.IOVector a) -> IO (Stream a)
-swapOutChunk = serialChunk' >=> deserialS'
+swapOutChunk v = serialChunk' v >>= \fn -> deserialS' fn >>= \s -> pure (s {sizeEstimation = Just (V.length v)})
     where
         serialChunk' :: HasCallStack => Serial a => (V.IOVector a) -> IO FilePath
         serialChunk' chunk = do
             (fn, fh) <- newTempFile WriteMode
-            hSetBuffering fh bufferMode
+            hSetBuffering fh bigBufferMode
             forM_ [0 .. V.length chunk - 1] $ \i -> V.read chunk i >>= (hPutStr fh . runPutS . serialize)
             hClose fh
             pure fn
@@ -274,7 +287,7 @@ swapOutChunk = serialChunk' >=> deserialS'
         deserialS' :: forall a. HasCallStack => Serial a => FilePath -> IO (Stream a)
         deserialS' fn = do
             fh <- openBinaryFile fn ReadMode
-            hSetBuffering fh bufferMode
+            hSetBuffering fh smallBufferMode
             buffer <- newIORef BS.empty
 
             let getNext = do
@@ -284,31 +297,38 @@ swapOutChunk = serialChunk' >=> deserialS'
                                 writeIORef buffer left
                                 pure (Just x)
                             Partial cont -> do
-                                buf2 <- hGet fh bufferSize
+                                buf2 <- hGet fh smallBufferSize
                                 if BS.null buf2 then pure Nothing else go (cont buf2)
                             Fail e left -> error "parse failed in readS"
                     go (runGetPartial (deserialize :: Get a) buf)
 
             pure (MkStream {next = getNext, close = hClose fh >> removeFile fn, sizeEstimation = Nothing})
 
+maxHandleNum :: Int
+maxHandleNum = 1000 --NOTE: create too many Handle will cause some weild error...
+
 -- | sort a stream 's' with a weight function 'f'
 -- , this size estimation is used to decide the 'chunkSize'
 sortWithS :: HasCallStack => (Serial a, Ord a, Ord b)
     => (a -> b) -> (Stream a) -> IO (Stream a)
 sortWithS f s = do
-    let chunkSize = (max 1000 (floor (sqrt (fromIntegral (fromMaybe 400000000 (sizeEstimation s))))))
+    let szEst = (fromMaybe 100000000 (sizeEstimation s))
+    let minChunkSize = (max (szEst `div` maxHandleNum) 1000)
+    let chunkSize = (max minChunkSize (floor (sqrt (fromIntegral szEst))))
     putStrLn ("Sorting With Chunk Size: " ++ show chunkSize)
     gnum <- newIORef 1
     chunks <- chunksOfS chunkSize s
     sortedChunks <- forEachS chunks $ \chunk -> do
         gn <- readIORef gnum
-        putStr ("  Processing Chunk " ++ show gn ++ "(sz: " ++ show (V.length chunk) ++ ") -- ")
+        putStr ("  Sorting Chunk " ++ show gn ++ "(sz: " ++ show (V.length chunk) ++ ") -- ")
         Intro.sortBy (compare `on` f) chunk
         swapped <- swapOutChunk chunk
         putStrLn (" -- Done.")
         writeIORef gnum (gn+1)
         pure swapped
-    mergeSortedWithS f sortedChunks
+    gn <- readIORef gnum
+    s' <- (mergeSortedWithS f sortedChunks)
+    pure (s' {sizeEstimation = mergeSzEst (sizeEstimation s) (Just (gn * chunkSize))})
 
 -- | take first n elements of a Stream
 takeS :: HasCallStack => Int -> (Stream a) -> IO (Stream a)
@@ -328,14 +348,13 @@ takeS n s = do
             else
                 pure Nothing
 
-    pure (MkStream {next = getNext, close = close s, sizeEstimation = Just n})
+    pure (MkStream {next = getNext, close = close s, sizeEstimation = Just n}) --TODO: consider sizeEst s
 
 -- | count continuous equivalent elements in a Stream
 countContinuousS :: HasCallStack => Eq a => (Stream a) -> IO (Stream (a, Int))
 countContinuousS s = do
     latest <- newIORef Nothing
     cnt <- newIORef 0
-    gnum <- newIORef 0
 
     let findNext = do
             c <- readIORef cnt
@@ -350,15 +369,13 @@ countContinuousS s = do
                             writeIORef latest (Just x)
                             writeIORef cnt 1
                             case lat of
-                                Just lx -> modifyIORef gnum (+1) >> pure (Just (lx, c))
+                                Just lx -> pure (Just (lx, c))
                                 Nothing -> findNext
                     Nothing -> do
                         if c <= 0 then pure Nothing
                         else do
                             writeIORef cnt (-1)
-                            modifyIORef gnum (+1)
                             pure (Just (fromJust lat, c))
 
-    gn <- readIORef gnum
-    pure (MkStream {next = findNext, close = close s, sizeEstimation = Just gn})
+    pure (MkStream {next = findNext, close = close s, sizeEstimation = sizeEstimation s})
 
