@@ -19,6 +19,11 @@ stack install
 - ext-sort: 外部排序, 输入文件名, 输出结果会写到相应文件, 文件名形如 `u100.in.sort.out`
 - top-count: 找出现次数最多的100项, 输入文件名, 输出结果写到文件, 文件名形如 `u100.in.top-count.out`
 
+Tips:
+
+- 命令行参数后面加 `+RTS -s` 可以查看用时及性能分析数据, 如 `top-count u100.in +RTS -s`
+- 命令行参数后面加 `+RTS -Nx` 可以指定CPU核心数, 如 `top-count u100.in +RTS -s -N4`
+
 运行单元测试:
 
 ```
